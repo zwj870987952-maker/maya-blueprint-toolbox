@@ -1,0 +1,4 @@
+.firecrawl/
+.vs/
+__pycache__/
+*.py[cod]

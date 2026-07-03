@@ -5,6 +5,30 @@ from .common import MayaApiError, UndoChunk, maya_modules
 from .scene_nodes import existing_nodes
 
 
+COMMON_ATTRIBUTE_NAMES = [
+    "translateX",
+    "translateY",
+    "translateZ",
+    "rotateX",
+    "rotateY",
+    "rotateZ",
+    "scaleX",
+    "scaleY",
+    "scaleZ",
+    "visibility",
+    "tx",
+    "ty",
+    "tz",
+    "rx",
+    "ry",
+    "rz",
+    "sx",
+    "sy",
+    "sz",
+    "v",
+]
+
+
 def set_attribute(nodes, attribute, value, value_type="text"):
     """Set one attribute on each input node."""
     cmds = maya_modules()
@@ -46,6 +70,92 @@ def make_attribute_refs(nodes, attribute):
 
     print("Make Attribute Ref: {0} attribute(s).".format(len(refs)))
     return refs
+
+
+def make_attribute_refs_from_items(nodes, attribute_items):
+    """Build attribute references from full attr paths or attr names."""
+    cmds = maya_modules()
+    items = parse_attribute_items(attribute_items)
+    if not items:
+        raise MayaApiError("Attribute item is required.")
+
+    refs = []
+    attribute_names = []
+    for item in items:
+        if "." in item:
+            attr_ref = AttrRef.from_full_attr(item)
+            if not cmds.objExists(attr_ref.full_attr):
+                raise MayaApiError("Attribute does not exist: {0}".format(attr_ref.full_attr))
+            refs.append(attr_ref)
+        else:
+            attribute_names.append(item)
+
+    if attribute_names:
+        source_nodes = existing_nodes(normalize_node_list(nodes))
+        for node in source_nodes:
+            for attribute in attribute_names:
+                attr_path = "{0}.{1}".format(node, attribute)
+                if not cmds.objExists(attr_path):
+                    raise MayaApiError("Attribute does not exist: {0}".format(attr_path))
+                refs.append(AttrRef(node, attribute))
+
+    refs = _unique_attr_refs(refs)
+    print("Make Attribute Ref: {0} attribute(s).".format(len(refs)))
+    return refs
+
+
+def parse_attribute_items(attribute_items):
+    """Parse attribute item storage from list or legacy comma/newline text."""
+    if not attribute_items:
+        return []
+    if isinstance(attribute_items, (list, tuple)):
+        return _unique_text_items(attribute_items)
+
+    normalized = str(attribute_items).replace("\n", ",").replace(";", ",")
+    return _unique_text_items(normalized.split(","))
+
+
+def common_attribute_names():
+    """Return built-in common Maya attributes for search controls."""
+    return list(COMMON_ATTRIBUTE_NAMES)
+
+
+def selected_node_attribute_names():
+    """Return attribute names available on the current Maya selection."""
+    cmds = maya_modules()
+    selected_nodes = cmds.ls(selection=True, long=True) or []
+    names = []
+    for node in selected_nodes:
+        names.extend(cmds.listAttr(node) or [])
+    return _unique_text_items(names)
+
+
+def selected_channel_box_attribute_names():
+    """Return attribute names selected in the Channel Box."""
+    cmds = maya_modules()
+    selected_nodes = cmds.ls(selection=True, long=True) or []
+    if not selected_nodes:
+        raise MayaApiError("No Maya selection found.")
+
+    attr_names = []
+    channel_box = "mainChannelBox"
+    query_flags = [
+        "selectedMainAttributes",
+        "selectedShapeAttributes",
+        "selectedHistoryAttributes",
+        "selectedOutputAttributes",
+    ]
+    for flag in query_flags:
+        try:
+            attr_names.extend(cmds.channelBox(channel_box, query=True, **{flag: True}) or [])
+        except Exception:
+            pass
+
+    attr_names = _unique_text_items(attr_names)
+    if not attr_names:
+        raise MayaApiError("No Channel Box attributes selected.")
+
+    return attr_names
 
 
 def inspect_attributes(attr_refs):
@@ -138,6 +248,27 @@ def _existing_attr_refs(attr_refs):
         if not cmds.objExists(attr_ref.full_attr):
             raise MayaApiError("Attribute does not exist: {0}".format(attr_ref.full_attr))
     return refs
+
+
+def _unique_text_items(items):
+    result = []
+    seen = set()
+    for item in items or []:
+        text = str(item).strip()
+        if text and text not in seen:
+            result.append(text)
+            seen.add(text)
+    return result
+
+
+def _unique_attr_refs(attr_refs):
+    result = []
+    seen = set()
+    for attr_ref in attr_refs or []:
+        if attr_ref.full_attr not in seen:
+            result.append(attr_ref)
+            seen.add(attr_ref.full_attr)
+    return result
 
 
 def _inspect_attr_ref(attr_ref):

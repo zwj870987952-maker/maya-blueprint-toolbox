@@ -4,6 +4,7 @@
 class PortTypes(object):
     """Canonical port type names for graph validation."""
 
+    ANY = "ANY"
     EXEC = "EXEC"
     STRING = "STRING"
     PATH = "PATH"
@@ -19,6 +20,7 @@ class PortTypes(object):
 
 
 _ALIASES = {
+    "any": PortTypes.ANY,
     "execution": PortTypes.EXEC,
     "text": PortTypes.STRING,
     "path": PortTypes.PATH,
@@ -45,6 +47,8 @@ def port_types_compatible(source_type, target_type):
     """Return whether an output port may connect to an input port."""
     source = canonical_port_type(source_type)
     target = canonical_port_type(target_type)
+    if source == PortTypes.ANY or target == PortTypes.ANY:
+        return True
     if source == target:
         return True
 

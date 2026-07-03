@@ -6,6 +6,8 @@ import json
 from ..core.executor import WorkflowExecutionError, WorkflowExecutor
 from ..core.node_specs import default_node_specs
 from ..core.types import canonical_port_type, port_types_compatible
+from ..maya_api import attributes, selection
+from ..maya_api.common import MayaApiError
 from ..qt_compat import QtCore, QtGui, QtWidgets, qt_enum
 
 
@@ -40,9 +42,13 @@ class PortGraphicsItem(QtWidgets.QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setToolTip("{0}: {1}".format(self.label, self.port_type))
 
+    def type_color(self):
+        return self._color_for_type(self.port_type)
+
     def _color_for_type(self, port_type):
         port_type = canonical_port_type(port_type)
         colors = {
+            "ANY": "#bfc7d5",
             "EXEC": "#f2c94c",
             "STRING": "#56ccf2",
             "PATH": "#6fcf97",
@@ -89,7 +95,7 @@ class ConnectionGraphicsItem(QtWidgets.QGraphicsPathItem):
         self.target_port = target_port
         self.pending_end = None
         self.setZValue(-1)
-        self.setPen(QtGui.QPen(QtGui.QColor("#8da2bf"), 2.0))
+        self.setPen(QtGui.QPen(self._connection_color(), 2.0))
         self.setFlag(
             qt_enum(
                 (QtWidgets.QGraphicsItem, "GraphicsItemFlag.ItemIsSelectable"),
@@ -97,6 +103,11 @@ class ConnectionGraphicsItem(QtWidgets.QGraphicsPathItem):
             ),
             True,
         )
+
+    def _connection_color(self):
+        if self.source_port is not None:
+            return self.source_port.type_color()
+        return QtGui.QColor("#8da2bf")
 
     def set_pending_end(self, scene_pos):
         self.pending_end = scene_pos
@@ -139,10 +150,12 @@ class NodeGraphicsItem(QtWidgets.QGraphicsRectItem):
         self.node_spec = node_spec
         self.parameters = node_spec.default_parameters()
         self.parameters.update(parameters or {})
+        self._migrate_legacy_parameters()
         self.input_ports = []
         self.output_ports = []
         self.status = "idle"
         self.status_text_item = None
+        self.last_result_text = ""
 
         height = NODE_HEADER_HEIGHT + max(len(node_spec.inputs), len(node_spec.outputs), 1) * NODE_ROW_HEIGHT + 14
         super(NodeGraphicsItem, self).__init__(0, 0, NODE_WIDTH, height)
@@ -174,6 +187,13 @@ class NodeGraphicsItem(QtWidgets.QGraphicsRectItem):
         self._build_visuals()
         self.set_status("idle")
 
+    def _migrate_legacy_parameters(self):
+        if self.node_spec.node_type == "maya.attributes.make_ref":
+            legacy_attribute = self.parameters.get("attribute")
+            attribute_items = self.parameters.get("attribute_items")
+            if legacy_attribute and not attribute_items:
+                self.parameters["attribute_items"] = [legacy_attribute]
+
     def _build_visuals(self):
         no_button = qt_enum(
             (QtCore.Qt, "MouseButton.NoButton"),
@@ -181,8 +201,9 @@ class NodeGraphicsItem(QtWidgets.QGraphicsRectItem):
         )
 
         header = QtWidgets.QGraphicsRectItem(0, 0, NODE_WIDTH, NODE_HEADER_HEIGHT, self)
-        header.setBrush(QtGui.QBrush(QtGui.QColor("#343b48")))
-        header.setPen(QtGui.QPen(QtGui.QColor("#343b48"), 0))
+        header_color = QtGui.QColor(self.node_spec.class_color())
+        header.setBrush(QtGui.QBrush(header_color))
+        header.setPen(QtGui.QPen(header_color, 0))
         header.setZValue(1)
 
         self._create_text_item(
@@ -296,6 +317,13 @@ class NodeGraphicsItem(QtWidgets.QGraphicsRectItem):
             "skipped": "跳过",
         }
         return labels.get(status, status.upper())
+
+    def clear_runtime_result(self):
+        self.last_result_text = ""
+
+    def set_runtime_result(self, outputs):
+        if self.node_spec.node_type == "debug.print_result":
+            self.last_result_text = str((outputs or {}).get("display", ""))
 
     def serialize(self):
         return {
@@ -500,7 +528,7 @@ class BlueprintGraphicsScene(QtWidgets.QGraphicsScene):
                 continue
             for parameter_spec in node_item.node_spec.parameters:
                 value = node_item.parameters.get(parameter_spec.name)
-                if parameter_spec.required and (value is None or value == ""):
+                if parameter_spec.required and self._is_missing_required_parameter(value):
                     issues.append(
                         "{0}.{1} 是必填参数。".format(node_item.node_id, parameter_spec.label)
                     )
@@ -509,22 +537,64 @@ class BlueprintGraphicsScene(QtWidgets.QGraphicsScene):
                     issues.append(
                         "{0}.{1} 输入未连接。".format(node_item.node_id, port.label)
                     )
+            if self._make_ref_needs_node_input(node_item) and not self._workflow_has_input_connection(
+                connections,
+                node_item.node_id,
+                "nodes",
+            ):
+                issues.append("{0}.属性名需要连接 节点 输入。".format(node_item.node_id))
         return issues
+
+    def _is_missing_required_parameter(self, value):
+        if value is None:
+            return True
+        if value == "":
+            return True
+        if isinstance(value, (list, tuple)) and not value:
+            return True
+        return False
 
     def reset_node_statuses(self):
         for node_item in self.nodes_by_id.values():
             node_item.set_status("idle")
+            node_item.clear_runtime_result()
 
     def set_node_status(self, node_id, status, message=""):
         node_item = self.nodes_by_id.get(node_id)
         if node_item is not None:
             node_item.set_status(status, message)
 
+    def set_node_results(self, results):
+        for node_id, outputs in (results or {}).items():
+            node_item = self.nodes_by_id.get(node_id)
+            if node_item is not None:
+                node_item.set_runtime_result(outputs)
+
     def _workflow_has_input_connection(self, connections, node_id, port_name):
         for connection in connections:
             if connection.get("target_node") == node_id and connection.get("target_port") == port_name:
                 return True
         return False
+
+    def _make_ref_needs_node_input(self, node_item):
+        if node_item.node_spec.node_type != "maya.attributes.make_ref":
+            return False
+        attribute_items = node_item.parameters.get("attribute_items")
+        if attribute_items is None:
+            attribute_items = node_item.parameters.get("attribute", "")
+        for item in self._parameter_items(attribute_items):
+            if "." not in item:
+                return True
+        return False
+
+    def _parameter_items(self, value):
+        if not value:
+            return []
+        if isinstance(value, (list, tuple)):
+            values = value
+        else:
+            values = str(value).replace("\n", ",").replace(";", ",").split(",")
+        return [str(item).strip() for item in values if str(item).strip()]
 
     def _upstream_node_ids(self, target_node_ids):
         included_node_ids = set(target_node_ids)
@@ -788,6 +858,207 @@ class NodeSearchDialog(QtWidgets.QDialog):
         self.search_field.selectAll()
 
 
+class ListParameterEditor(QtWidgets.QWidget):
+    """Editable list parameter with add/remove controls."""
+
+    def __init__(self, values=None, on_change=None, parent=None):
+        super(ListParameterEditor, self).__init__(parent)
+        self.items = self._normalize_values(values)
+        self.on_change = on_change
+        self.list_widget = QtWidgets.QListWidget(self)
+        self.message_label = QtWidgets.QLabel("", self)
+        self.message_label.setStyleSheet("color: #8b95a5;")
+        self.user_role = qt_enum(
+            (QtCore.Qt, "ItemDataRole.UserRole"),
+            (QtCore.Qt, "UserRole"),
+        )
+        self._build_base_ui()
+        self._sync_list()
+
+    def _build_base_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.list_widget.setMinimumHeight(90)
+        self.list_widget.setSelectionMode(
+            qt_enum(
+                (QtWidgets.QAbstractItemView, "SelectionMode.ExtendedSelection"),
+                (QtWidgets.QAbstractItemView, "ExtendedSelection"),
+            )
+        )
+        layout.addWidget(self.list_widget)
+        layout.addWidget(self.message_label)
+
+    def add_items(self, items):
+        added = 0
+        for item in self._normalize_values(items):
+            if item not in self.items:
+                self.items.append(item)
+                added += 1
+        self._sync_list()
+        self._emit_changed()
+        return added
+
+    def remove_selected_items(self):
+        selected_items = self.list_widget.selectedItems()
+        selected_values = set(item.data(self.user_role) for item in selected_items)
+        if not selected_values:
+            self._set_message("没有选中要删除的条目。")
+            return
+        self.items = [item for item in self.items if item not in selected_values]
+        self._sync_list()
+        self._emit_changed()
+        self._set_message("已删除 {0} 个条目。".format(len(selected_values)))
+
+    def _sync_list(self):
+        self.list_widget.clear()
+        for item_text in self.items:
+            item = QtWidgets.QListWidgetItem(item_text)
+            item.setData(self.user_role, item_text)
+            self.list_widget.addItem(item)
+
+    def _emit_changed(self):
+        if self.on_change is not None:
+            self.on_change(list(self.items))
+
+    def _set_message(self, message):
+        self.message_label.setText(message)
+        if message:
+            print("Maya Blueprint: {0}".format(message))
+
+    def _normalize_values(self, values):
+        if not values:
+            return []
+        if isinstance(values, (list, tuple)):
+            source_values = values
+        else:
+            source_values = str(values).replace("\n", ",").replace(";", ",").split(",")
+
+        result = []
+        seen = set()
+        for value in source_values:
+            text = str(value).strip()
+            if text and text not in seen:
+                result.append(text)
+                seen.add(text)
+        return result
+
+
+class NodeListParameterEditor(ListParameterEditor):
+    """Node list editor that can capture the current Maya selection."""
+
+    def __init__(self, values=None, on_change=None, parent=None):
+        self.manual_field = QtWidgets.QLineEdit(parent)
+        self.add_manual_button = QtWidgets.QPushButton("添加", parent)
+        self.capture_button = QtWidgets.QPushButton("录入当前选择", parent)
+        self.remove_button = QtWidgets.QPushButton("删除选中", parent)
+        super(NodeListParameterEditor, self).__init__(values, on_change, parent)
+
+    def _build_base_ui(self):
+        super(NodeListParameterEditor, self)._build_base_ui()
+        layout = self.layout()
+
+        self.manual_field.setPlaceholderText("手写节点名，可选")
+        manual_row = QtWidgets.QHBoxLayout()
+        manual_row.addWidget(self.manual_field, 1)
+        manual_row.addWidget(self.add_manual_button)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.capture_button)
+        button_row.addWidget(self.remove_button)
+
+        layout.insertLayout(0, manual_row)
+        layout.addLayout(button_row)
+
+        self.add_manual_button.clicked.connect(self._add_manual_text)
+        self.capture_button.clicked.connect(self._capture_selection)
+        self.remove_button.clicked.connect(self.remove_selected_items)
+
+    def _add_manual_text(self):
+        added = self.add_items(self.manual_field.text())
+        self.manual_field.clear()
+        self._set_message("已添加 {0} 个节点。".format(added))
+
+    def _capture_selection(self):
+        try:
+            selected_nodes = selection.get_current_selection(include_shapes=False)
+        except MayaApiError as error:
+            self._set_message(str(error))
+            return
+        if not selected_nodes:
+            self._set_message("Maya 当前没有选择对象。")
+            return
+        added = self.add_items(selected_nodes)
+        self._set_message("已录入 {0} 个选择对象。".format(added))
+
+
+class AttributeItemListParameterEditor(ListParameterEditor):
+    """Attribute item editor for reusable attribute names."""
+
+    def __init__(self, values=None, on_change=None, parent=None):
+        self.attribute_combo = QtWidgets.QComboBox(parent)
+        self.add_attribute_button = QtWidgets.QPushButton("添加属性", parent)
+        self.refresh_button = QtWidgets.QPushButton("刷新选择属性", parent)
+        self.capture_button = QtWidgets.QPushButton("录入通道栏属性", parent)
+        self.remove_button = QtWidgets.QPushButton("删除选中", parent)
+        super(AttributeItemListParameterEditor, self).__init__(values, on_change, parent)
+
+    def _build_base_ui(self):
+        super(AttributeItemListParameterEditor, self)._build_base_ui()
+        layout = self.layout()
+
+        self.attribute_combo.setEditable(True)
+        for attr_name in attributes.common_attribute_names():
+            self.attribute_combo.addItem(attr_name)
+
+        picker_row = QtWidgets.QHBoxLayout()
+        picker_row.addWidget(self.attribute_combo, 1)
+        picker_row.addWidget(self.add_attribute_button)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.refresh_button)
+        button_row.addWidget(self.capture_button)
+        button_row.addWidget(self.remove_button)
+
+        layout.insertLayout(0, picker_row)
+        layout.addLayout(button_row)
+
+        self.add_attribute_button.clicked.connect(self._add_combo_attribute)
+        self.refresh_button.clicked.connect(self._refresh_selection_attributes)
+        self.capture_button.clicked.connect(self._capture_channel_box_attributes)
+        self.remove_button.clicked.connect(self.remove_selected_items)
+
+    def _add_combo_attribute(self):
+        text = self.attribute_combo.currentText()
+        added = self.add_items(text)
+        self._set_message("已添加 {0} 个属性。".format(added))
+
+    def _refresh_selection_attributes(self):
+        try:
+            attr_names = attributes.selected_node_attribute_names()
+        except MayaApiError as error:
+            self._set_message(str(error))
+            return
+        existing = set(self.attribute_combo.itemText(index) for index in range(self.attribute_combo.count()))
+        added = 0
+        for attr_name in attr_names:
+            if attr_name not in existing:
+                self.attribute_combo.addItem(attr_name)
+                existing.add(attr_name)
+                added += 1
+        self._set_message("已刷新 {0} 个可选属性。".format(added))
+
+    def _capture_channel_box_attributes(self):
+        try:
+            attr_names = attributes.selected_channel_box_attribute_names()
+        except MayaApiError as error:
+            self._set_message(str(error))
+            return
+        added = self.add_items(attr_names)
+        self._set_message("已录入 {0} 个通道栏属性。".format(added))
+
+
 class NodePropertiesPanel(QtWidgets.QWidget):
     """Property editor for the selected node."""
 
@@ -826,9 +1097,25 @@ class NodePropertiesPanel(QtWidgets.QWidget):
             editor = self._create_editor(parameter_spec)
             self.editor_widgets[parameter_spec.name] = editor
             self.form_layout.addRow(parameter_spec.label, editor)
+        if self.node_item.node_spec.node_type == "debug.print_result":
+            self.form_layout.addRow("结果", self._create_result_view())
 
     def _create_editor(self, parameter_spec):
         value = self.node_item.parameters.get(parameter_spec.name, parameter_spec.default)
+
+        if parameter_spec.param_type == "node_list":
+            return NodeListParameterEditor(
+                value,
+                on_change=lambda new_value, name=parameter_spec.name: self._set_value(name, new_value),
+                parent=self,
+            )
+
+        if parameter_spec.param_type == "attribute_item_list":
+            return AttributeItemListParameterEditor(
+                value,
+                on_change=lambda new_value, name=parameter_spec.name: self._set_value(name, new_value),
+                parent=self,
+            )
 
         if parameter_spec.param_type == "bool":
             editor = QtWidgets.QCheckBox(self)
@@ -874,6 +1161,13 @@ class NodePropertiesPanel(QtWidgets.QWidget):
     def _set_value(self, name, value):
         if self.node_item is not None:
             self.node_item.set_parameter(name, value)
+
+    def _create_result_view(self):
+        editor = QtWidgets.QPlainTextEdit(self)
+        editor.setReadOnly(True)
+        editor.setMinimumHeight(120)
+        editor.setPlainText(self.node_item.last_result_text or "尚未运行。")
+        return editor
 
 
 class BlueprintCanvasWidget(QtWidgets.QWidget):
@@ -1097,6 +1391,7 @@ class BlueprintCanvasWidget(QtWidgets.QWidget):
                     workflow_data,
                     status_callback=self._set_node_run_status,
                 )
+                self.scene.set_node_results(results)
             except WorkflowExecutionError as error:
                 self.status_label.setText("{0} 失败，请看 Script Editor。".format(run_label))
                 print("Maya Blueprint 运行失败：{0}".format(error))
@@ -1108,6 +1403,7 @@ class BlueprintCanvasWidget(QtWidgets.QWidget):
 
             self.status_label.setText("{0} 完成：{1} 个节点。".format(run_label, len(results)))
             print("Maya Blueprint {0} 完成：{1} 个节点。".format(run_label, len(results)))
+            self._sync_properties_panel()
 
     def _workflow_for_current_run(self, selected_node_ids):
         if selected_node_ids:

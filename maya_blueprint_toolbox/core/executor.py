@@ -95,6 +95,18 @@ class WorkflowExecutor(object):
             return {"value": parameters.get("value", "")}
         if node_type == "maya.nodes.node_names":
             return self._execute_node_names(parameters)
+        if node_type == "maya.nodes.by_type":
+            return self._execute_nodes_by_type(parameters)
+        if node_type == "maya.nodes.skin_cluster":
+            return self._execute_related_nodes(input_values, scene_nodes.related_skin_clusters)
+        if node_type == "maya.nodes.blend_shape":
+            return self._execute_related_nodes(input_values, scene_nodes.related_blend_shapes)
+        if node_type == "maya.nodes.deformers":
+            return self._execute_related_nodes(input_values, scene_nodes.related_deformers)
+        if node_type == "maya.nodes.materials":
+            return self._execute_materials(input_values)
+        if node_type == "maya.nodes.constraints":
+            return self._execute_constraints_lookup(input_values)
         if node_type == "maya.selection.current":
             return self._execute_current_selection(parameters)
         if node_type == "maya.selection.select_nodes":
@@ -109,6 +121,8 @@ class WorkflowExecutor(object):
             return self._execute_make_attribute_refs(parameters, input_values)
         if node_type == "maya.attributes.inspect":
             return self._execute_inspect_attributes(input_values)
+        if node_type == "debug.print_result":
+            return self._execute_print_result(parameters, input_values)
         if node_type == "maya.attributes.set":
             return self._execute_set_attribute(parameters, input_values)
         if node_type == "maya.attributes.get":
@@ -123,7 +137,42 @@ class WorkflowExecutor(object):
         raise WorkflowExecutionError("No executor registered for node type: {0}".format(node_type))
 
     def _execute_node_names(self, parameters):
-        return {"nodes": scene_nodes.parse_node_names(parameters.get("names", ""))}
+        return {"nodes": scene_nodes.parse_node_names(parameters.get("names", []))}
+
+    def _execute_nodes_by_type(self, parameters):
+        try:
+            nodes = scene_nodes.nodes_by_type(
+                parameters.get("maya_type", ""),
+                shape_result=parameters.get("shape_result", "original"),
+                long_name=bool(parameters.get("long_name", True)),
+            )
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"nodes": nodes}
+
+    def _execute_related_nodes(self, input_values, command):
+        nodes = input_values.get("nodes") or []
+        try:
+            related_nodes = command(nodes)
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"nodes": related_nodes}
+
+    def _execute_materials(self, input_values):
+        nodes = input_values.get("nodes") or []
+        try:
+            materials = scene_nodes.related_materials(nodes)
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"materials": materials}
+
+    def _execute_constraints_lookup(self, input_values):
+        nodes = input_values.get("nodes") or []
+        try:
+            related_constraints = scene_nodes.related_constraints(nodes)
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"constraints": related_constraints}
 
     def _execute_current_selection(self, parameters):
         include_shapes = bool(parameters.get("include_shapes", False))
@@ -207,9 +256,11 @@ class WorkflowExecutor(object):
 
     def _execute_make_attribute_refs(self, parameters, input_values):
         nodes = input_values.get("nodes") or []
-        attribute = parameters.get("attribute", "")
+        attribute_items = parameters.get("attribute_items")
+        if attribute_items is None:
+            attribute_items = parameters.get("attribute", "")
         try:
-            attr_refs = attributes.make_attribute_refs(nodes, attribute)
+            attr_refs = attributes.make_attribute_refs_from_items(nodes, attribute_items)
         except MayaApiError as error:
             raise WorkflowExecutionError(str(error))
         return {"attrs": attr_refs}
@@ -226,6 +277,51 @@ class WorkflowExecutor(object):
             "value": values[0] if len(values) == 1 else values,
             "report": attributes.packets_report(packets),
         }
+
+    def _execute_print_result(self, parameters, input_values):
+        label = parameters.get("label") or "打印结果"
+        value = input_values.get("input")
+        formatted_value = self._format_debug_value(value)
+        print("Maya Blueprint {0}:".format(label))
+        print(formatted_value)
+        return {
+            "display": formatted_value,
+            "done": True,
+        }
+
+    def _format_debug_value(self, value, indent=0):
+        prefix = " " * indent
+        if hasattr(value, "to_dict"):
+            return self._format_debug_value(value.to_dict(), indent=indent)
+        if isinstance(value, dict):
+            if not value:
+                return "{}"
+            lines = ["{"]
+            for key in sorted(value.keys()):
+                lines.append(
+                    "{0}  {1}: {2}".format(
+                        prefix,
+                        key,
+                        self._format_debug_value(value[key], indent=indent + 2),
+                    )
+                )
+            lines.append("{0}}}".format(prefix))
+            return "\n".join(lines)
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return "[]"
+            lines = ["["]
+            for index, item in enumerate(value):
+                lines.append(
+                    "{0}  {1}: {2}".format(
+                        prefix,
+                        index,
+                        self._format_debug_value(item, indent=indent + 2),
+                    )
+                )
+            lines.append("{0}]".format(prefix))
+            return "\n".join(lines)
+        return repr(value)
 
     def _execute_constraint(self, node_type, parameters, input_values):
         drivers = input_values.get("drivers") or []

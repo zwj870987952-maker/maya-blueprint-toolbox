@@ -60,6 +60,11 @@ class PortGraphicsItem(QtWidgets.QGraphicsEllipseItem):
             "ATTR_REF": "#f2994a",
             "ATTR_LIST": "#f2994a",
             "ATTR_PACKET": "#eb5757",
+            "FRAME_RANGE": "#f2c94c",
+            "FRAME_LIST": "#f2c94c",
+            "CHANNEL_LIST": "#f2994a",
+            "TRANSFORM_FRAME_DATA": "#d0a8ff",
+            "ANIM_REPORT": "#7fb069",
             "FILE_RESULT": "#27ae60",
         }
         return QtGui.QColor(colors.get(port_type, "#bfc7d5"))

@@ -16,6 +16,11 @@ class PortTypes(object):
     ATTR_REF = "ATTR_REF"
     ATTR_LIST = "ATTR_LIST"
     ATTR_PACKET = "ATTR_PACKET"
+    FRAME_RANGE = "FRAME_RANGE"
+    FRAME_LIST = "FRAME_LIST"
+    CHANNEL_LIST = "CHANNEL_LIST"
+    TRANSFORM_FRAME_DATA = "TRANSFORM_FRAME_DATA"
+    ANIM_REPORT = "ANIM_REPORT"
     FILE_RESULT = "FILE_RESULT"
 
 
@@ -31,6 +36,11 @@ _ALIASES = {
     "attr_ref": PortTypes.ATTR_REF,
     "attr_list": PortTypes.ATTR_LIST,
     "attr_packet": PortTypes.ATTR_PACKET,
+    "frame_range": PortTypes.FRAME_RANGE,
+    "frame_list": PortTypes.FRAME_LIST,
+    "channel_list": PortTypes.CHANNEL_LIST,
+    "transform_frame_data": PortTypes.TRANSFORM_FRAME_DATA,
+    "anim_report": PortTypes.ANIM_REPORT,
     "file_result": PortTypes.FILE_RESULT,
 }
 
@@ -52,7 +62,14 @@ def port_types_compatible(source_type, target_type):
     if source == target:
         return True
 
-    value_sources = set([PortTypes.STRING, PortTypes.PATH, PortTypes.NUMBER, PortTypes.BOOL])
+    value_sources = set([
+        PortTypes.STRING,
+        PortTypes.PATH,
+        PortTypes.NUMBER,
+        PortTypes.BOOL,
+        PortTypes.TRANSFORM_FRAME_DATA,
+        PortTypes.ANIM_REPORT,
+    ])
     if target == PortTypes.VALUE and source in value_sources:
         return True
     if source == PortTypes.VALUE and target in value_sources:
@@ -61,6 +78,8 @@ def port_types_compatible(source_type, target_type):
     if source == PortTypes.NODE_REF and target == PortTypes.NODE_LIST:
         return True
     if source == PortTypes.ATTR_REF and target == PortTypes.ATTR_LIST:
+        return True
+    if source == PortTypes.FRAME_RANGE and target == PortTypes.FRAME_LIST:
         return True
 
     return False
@@ -165,6 +184,35 @@ class AttrPacket(object):
 
     def __repr__(self):
         return "AttrPacket({0!r})".format(self.attr_ref.full_attr)
+
+
+class TransformFrameData(object):
+    """Captured transform values for one or more nodes over one or more frames."""
+
+    def __init__(self, source_nodes, frames, recorded_channels, paste_channels, samples, json_path=""):
+        self.source_nodes = list(source_nodes or [])
+        self.frames = list(frames or [])
+        self.recorded_channels = list(recorded_channels or [])
+        self.paste_channels = list(paste_channels or [])
+        self.samples = list(samples or [])
+        self.json_path = json_path or ""
+
+    def to_dict(self):
+        return {
+            "type": PortTypes.TRANSFORM_FRAME_DATA,
+            "source_nodes": list(self.source_nodes),
+            "frames": list(self.frames),
+            "recorded_channels": list(self.recorded_channels),
+            "paste_channels": list(self.paste_channels),
+            "samples": list(self.samples),
+            "json_path": self.json_path,
+        }
+
+    def __repr__(self):
+        return "TransformFrameData(nodes={0}, frames={1})".format(
+            len(self.source_nodes),
+            len(self.frames),
+        )
 
 
 def normalize_node_list(value):

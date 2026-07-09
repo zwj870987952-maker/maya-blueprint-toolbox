@@ -1,0 +1,331 @@
+{
+  "connections": [
+    {
+      "source_node": "current_selection_1",
+      "source_port": "nodes",
+      "target_node": "merge_node_lists_1",
+      "target_port": "nodes_a"
+    },
+    {
+      "source_node": "current_selection_1",
+      "source_port": "nodes",
+      "target_node": "merge_node_lists_1",
+      "target_port": "nodes_b"
+    },
+    {
+      "source_node": "merge_node_lists_1",
+      "source_port": "nodes",
+      "target_node": "unique_node_list_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "unique_node_list_1",
+      "source_port": "nodes",
+      "target_node": "filter_by_name_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "filter_pattern_1",
+      "source_port": "value",
+      "target_node": "filter_by_name_1",
+      "target_port": "pattern"
+    },
+    {
+      "source_node": "filter_by_name_1",
+      "source_port": "matched_nodes",
+      "target_node": "get_node_item_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "index_1",
+      "source_port": "value",
+      "target_node": "get_node_item_1",
+      "target_port": "index"
+    },
+    {
+      "source_node": "filter_by_name_1",
+      "source_port": "matched_nodes",
+      "target_node": "node_list_count_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "get_node_item_1",
+      "source_port": "nodes",
+      "target_node": "make_attr_ref_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "make_attr_ref_1",
+      "source_port": "attrs",
+      "target_node": "merge_attr_lists_1",
+      "target_port": "attrs_a"
+    },
+    {
+      "source_node": "make_attr_ref_1",
+      "source_port": "attrs",
+      "target_node": "merge_attr_lists_1",
+      "target_port": "attrs_b"
+    },
+    {
+      "source_node": "merge_attr_lists_1",
+      "source_port": "attrs",
+      "target_node": "unique_attr_list_1",
+      "target_port": "attrs"
+    },
+    {
+      "source_node": "unique_attr_list_1",
+      "source_port": "attrs",
+      "target_node": "filter_attr_by_name_1",
+      "target_port": "attrs"
+    },
+    {
+      "source_node": "attr_filter_pattern_1",
+      "source_port": "value",
+      "target_node": "filter_attr_by_name_1",
+      "target_port": "pattern"
+    },
+    {
+      "source_node": "filter_attr_by_name_1",
+      "source_port": "matched_attrs",
+      "target_node": "get_attr_item_1",
+      "target_port": "attrs"
+    },
+    {
+      "source_node": "index_1",
+      "source_port": "value",
+      "target_node": "get_attr_item_1",
+      "target_port": "index"
+    },
+    {
+      "source_node": "filter_attr_by_name_1",
+      "source_port": "matched_attrs",
+      "target_node": "attr_list_count_1",
+      "target_port": "attrs"
+    },
+    {
+      "source_node": "node_list_count_1",
+      "source_port": "count",
+      "target_node": "print_node_count_1",
+      "target_port": "input"
+    },
+    {
+      "source_node": "get_attr_item_1",
+      "source_port": "attrs",
+      "target_node": "print_attr_item_1",
+      "target_port": "input"
+    },
+    {
+      "source_node": "attr_list_count_1",
+      "source_port": "count",
+      "target_node": "print_attr_count_1",
+      "target_port": "input"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "current_selection_1",
+      "parameters": {
+        "include_shapes": false
+      },
+      "position": [
+        -820.0,
+        -80.0
+      ],
+      "title": "当前选择",
+      "type": "maya.selection.current"
+    },
+    {
+      "id": "merge_node_lists_1",
+      "parameters": {},
+      "position": [
+        -540.0,
+        -80.0
+      ],
+      "title": "合并节点列表",
+      "type": "transform.node_list.merge"
+    },
+    {
+      "id": "unique_node_list_1",
+      "parameters": {},
+      "position": [
+        -260.0,
+        -80.0
+      ],
+      "title": "去重节点列表",
+      "type": "transform.node_list.unique"
+    },
+    {
+      "id": "filter_pattern_1",
+      "parameters": {
+        "value": ""
+      },
+      "position": [
+        -270.0,
+        120.0
+      ],
+      "title": "文本",
+      "type": "constant.text"
+    },
+    {
+      "id": "filter_by_name_1",
+      "parameters": {
+        "case_sensitive": false,
+        "match_mode": "contains"
+      },
+      "position": [
+        20.0,
+        -80.0
+      ],
+      "title": "按名称过滤节点",
+      "type": "transform.node_list.filter_by_name"
+    },
+    {
+      "id": "index_1",
+      "parameters": {
+        "value": 0.0
+      },
+      "position": [
+        30.0,
+        160.0
+      ],
+      "title": "数字",
+      "type": "constant.number"
+    },
+    {
+      "id": "get_node_item_1",
+      "parameters": {},
+      "position": [
+        310.0,
+        -140.0
+      ],
+      "title": "取节点列表项",
+      "type": "transform.node_list.get_item"
+    },
+    {
+      "id": "node_list_count_1",
+      "parameters": {},
+      "position": [
+        310.0,
+        90.0
+      ],
+      "title": "节点列表数量",
+      "type": "transform.node_list.count"
+    },
+    {
+      "id": "make_attr_ref_1",
+      "parameters": {
+        "attribute_items": [
+          "translateX"
+        ]
+      },
+      "position": [
+        590.0,
+        -140.0
+      ],
+      "title": "创建属性引用",
+      "type": "maya.attributes.make_ref"
+    },
+    {
+      "id": "merge_attr_lists_1",
+      "parameters": {},
+      "position": [
+        870.0,
+        -140.0
+      ],
+      "title": "合并属性引用列表",
+      "type": "transform.attr_list.merge"
+    },
+    {
+      "id": "unique_attr_list_1",
+      "parameters": {},
+      "position": [
+        1150.0,
+        -140.0
+      ],
+      "title": "去重属性引用列表",
+      "type": "transform.attr_list.unique"
+    },
+    {
+      "id": "attr_filter_pattern_1",
+      "parameters": {
+        "value": "translate"
+      },
+      "position": [
+        1150.0,
+        90.0
+      ],
+      "title": "文本",
+      "type": "constant.text"
+    },
+    {
+      "id": "filter_attr_by_name_1",
+      "parameters": {
+        "case_sensitive": false,
+        "match_mode": "contains"
+      },
+      "position": [
+        1430.0,
+        -140.0
+      ],
+      "title": "按名称过滤属性引用",
+      "type": "transform.attr_list.filter_by_name"
+    },
+    {
+      "id": "get_attr_item_1",
+      "parameters": {},
+      "position": [
+        1710.0,
+        -180.0
+      ],
+      "title": "取属性引用列表项",
+      "type": "transform.attr_list.get_item"
+    },
+    {
+      "id": "attr_list_count_1",
+      "parameters": {},
+      "position": [
+        1710.0,
+        40.0
+      ],
+      "title": "属性引用列表数量",
+      "type": "transform.attr_list.count"
+    },
+    {
+      "id": "print_node_count_1",
+      "parameters": {
+        "label": "节点列表数量"
+      },
+      "position": [
+        590.0,
+        90.0
+      ],
+      "title": "打印结果",
+      "type": "debug.print_result"
+    },
+    {
+      "id": "print_attr_item_1",
+      "parameters": {
+        "label": "取属性引用列表项"
+      },
+      "position": [
+        1990.0,
+        -180.0
+      ],
+      "title": "打印结果",
+      "type": "debug.print_result"
+    },
+    {
+      "id": "print_attr_count_1",
+      "parameters": {
+        "label": "属性引用列表数量"
+      },
+      "position": [
+        1990.0,
+        40.0
+      ],
+      "title": "打印结果",
+      "type": "debug.print_result"
+    }
+  ],
+  "version": 1
+}

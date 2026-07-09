@@ -1,0 +1,75 @@
+{
+  "connections": [
+    {
+      "source_node": "current_selection_1",
+      "source_port": "nodes",
+      "target_node": "copy_frame_1",
+      "target_port": "nodes"
+    },
+    {
+      "source_node": "current_frame_1",
+      "source_port": "frames",
+      "target_node": "copy_frame_1",
+      "target_port": "frames"
+    },
+    {
+      "source_node": "transform_channels_1",
+      "source_port": "channels",
+      "target_node": "copy_frame_1",
+      "target_port": "channels"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "current_selection_1",
+      "parameters": {
+        "include_shapes": false
+      },
+      "position": [
+        -600.0,
+        -80.0
+      ],
+      "title": "当前选择",
+      "type": "maya.selection.current"
+    },
+    {
+      "id": "current_frame_1",
+      "parameters": {},
+      "position": [
+        -600.0,
+        80.0
+      ],
+      "title": "当前帧",
+      "type": "maya.timeline.current_frame"
+    },
+    {
+      "id": "transform_channels_1",
+      "parameters": {
+        "default_rotate": true,
+        "default_scale": false,
+        "default_translate": true
+      },
+      "position": [
+        -600.0,
+        240.0
+      ],
+      "title": "变换通道",
+      "type": "animation.channels.transform_defaults"
+    },
+    {
+      "id": "copy_frame_1",
+      "parameters": {
+        "json_path": "",
+        "record_short_name": true,
+        "save_json_when_unconnected": true
+      },
+      "position": [
+        -280.0,
+        20.0
+      ],
+      "title": "复制帧",
+      "type": "maya.animation.copy_frame"
+    }
+  ],
+  "version": 1
+}

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Workflow execution engine for Maya Blueprint Toolbox."""
 
-from ..maya_api import attributes, constraints, export, io, scene_nodes, selection
+from ..maya_api import animation, attributes, constraints, export, io, scene_nodes, selection
 from ..maya_api.common import MayaApiError
 
 
@@ -25,9 +25,10 @@ class WorkflowExecutor(object):
         for node_id in order:
             node_data = nodes_by_id[node_id]
             input_values = self._collect_inputs(node_id, connections, results)
+            connected_outputs = self._connected_outputs(node_id, connections)
             self._emit_status(status_callback, node_id, "running", "运行中")
             try:
-                outputs = self._execute_node(node_data, input_values)
+                outputs = self._execute_node(node_data, input_values, connected_outputs)
             except Exception as error:
                 self._emit_status(status_callback, node_id, "failed", str(error))
                 raise
@@ -81,9 +82,17 @@ class WorkflowExecutor(object):
             input_values[target_port] = source_outputs.get(source_port)
         return input_values
 
-    def _execute_node(self, node_data, input_values):
+    def _connected_outputs(self, node_id, connections):
+        connected = {}
+        for connection in connections:
+            if connection.get("source_node") == node_id:
+                connected[connection.get("source_port")] = True
+        return connected
+
+    def _execute_node(self, node_data, input_values, connected_outputs=None):
         node_type = node_data.get("type")
         parameters = node_data.get("parameters", {})
+        connected_outputs = connected_outputs or {}
 
         if node_type == "constant.text":
             return {"value": parameters.get("value", "")}
@@ -109,8 +118,16 @@ class WorkflowExecutor(object):
             return self._execute_constraints_lookup(input_values)
         if node_type == "maya.selection.current":
             return self._execute_current_selection(parameters)
+        if node_type == "maya.timeline.current_frame":
+            return self._execute_current_frame(input_values)
+        if node_type == "maya.timeline.frame_range":
+            return self._execute_frame_range(parameters, input_values)
+        if node_type == "maya.channels.selected_channel_box":
+            return self._execute_selected_channel_box(parameters)
         if node_type == "maya.selection.select_nodes":
             return self._execute_select_nodes(input_values)
+        if node_type == "maya.animation.copy_frame":
+            return self._execute_copy_frame(parameters, input_values, connected_outputs)
         if node_type == "maya.nodes.rename":
             return self._execute_rename_nodes(parameters, input_values)
         if node_type == "maya.nodes.group":
@@ -119,6 +136,34 @@ class WorkflowExecutor(object):
             return self._execute_delete_nodes(input_values)
         if node_type == "maya.attributes.make_ref":
             return self._execute_make_attribute_refs(parameters, input_values)
+        if node_type == "animation.channels.transform_defaults":
+            return self._execute_transform_channels(parameters, input_values)
+        if node_type == "transform.node_list.merge":
+            return self._execute_merge_node_lists(input_values)
+        if node_type == "transform.node_list.unique":
+            return self._execute_unique_node_list(input_values)
+        if node_type == "transform.node_list.sort_by_name":
+            return self._execute_sort_node_list_by_name(parameters, input_values)
+        if node_type == "transform.node_list.reverse":
+            return self._execute_reverse_node_list(input_values)
+        if node_type == "transform.node_list.sort_by_hierarchy":
+            return self._execute_sort_node_list_by_hierarchy(parameters, input_values)
+        if node_type == "transform.node_list.filter_by_name":
+            return self._execute_filter_node_list_by_name(parameters, input_values)
+        if node_type == "transform.node_list.get_item":
+            return self._execute_get_node_list_item(input_values)
+        if node_type == "transform.node_list.count":
+            return self._execute_node_list_count(input_values)
+        if node_type == "transform.attr_list.merge":
+            return self._execute_merge_attr_lists(input_values)
+        if node_type == "transform.attr_list.unique":
+            return self._execute_unique_attr_list(input_values)
+        if node_type == "transform.attr_list.filter_by_name":
+            return self._execute_filter_attr_list_by_name(parameters, input_values)
+        if node_type == "transform.attr_list.get_item":
+            return self._execute_get_attr_list_item(input_values)
+        if node_type == "transform.attr_list.count":
+            return self._execute_attr_list_count(input_values)
         if node_type == "maya.attributes.inspect":
             return self._execute_inspect_attributes(input_values)
         if node_type == "debug.print_result":
@@ -182,6 +227,37 @@ class WorkflowExecutor(object):
             raise WorkflowExecutionError(str(error))
         return {"nodes": nodes}
 
+    def _execute_current_frame(self, input_values):
+        frame_value = input_values.get("frame")
+        try:
+            frames = animation.current_frame(frame_value)
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"frames": frames}
+
+    def _execute_frame_range(self, parameters, input_values):
+        try:
+            frame_range, frames = animation.frame_range(
+                start_frame=input_values.get("start_frame"),
+                end_frame=input_values.get("end_frame"),
+                include_end=bool(parameters.get("include_end", True)),
+            )
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {
+            "frame_range": frame_range,
+            "frames": frames,
+        }
+
+    def _execute_selected_channel_box(self, parameters):
+        try:
+            channels = animation.selected_channel_box_channels(
+                default_transform=bool(parameters.get("default_transform", True)),
+            )
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"channels": channels}
+
     def _execute_select_nodes(self, input_values):
         nodes = input_values.get("nodes") or []
         try:
@@ -225,6 +301,27 @@ class WorkflowExecutor(object):
             raise WorkflowExecutionError(str(error))
         return {"done": done}
 
+    def _execute_copy_frame(self, parameters, input_values, connected_outputs):
+        nodes = input_values.get("nodes") or []
+        frames = input_values.get("frames")
+        channels = input_values.get("channels")
+        save_json = (
+            not connected_outputs.get("frame_data")
+            and bool(parameters.get("save_json_when_unconnected", True))
+        )
+        try:
+            frame_data = animation.copy_frame(
+                nodes,
+                frames,
+                paste_channels=channels,
+                save_json=save_json,
+                json_path=parameters.get("json_path", ""),
+                record_short_name=bool(parameters.get("record_short_name", True)),
+            )
+        except MayaApiError as error:
+            raise WorkflowExecutionError(str(error))
+        return {"frame_data": frame_data}
+
     def _execute_set_attribute(self, parameters, input_values):
         value = input_values.get("value")
         value_type = parameters.get("value_type", "auto")
@@ -264,6 +361,194 @@ class WorkflowExecutor(object):
         except MayaApiError as error:
             raise WorkflowExecutionError(str(error))
         return {"attrs": attr_refs}
+
+    def _execute_transform_channels(self, parameters, input_values):
+        translate_enabled = input_values.get("translate_enabled")
+        if translate_enabled is None:
+            translate_enabled = parameters.get("default_translate", True)
+
+        rotate_enabled = input_values.get("rotate_enabled")
+        if rotate_enabled is None:
+            rotate_enabled = parameters.get("default_rotate", True)
+
+        scale_enabled = input_values.get("scale_enabled")
+        if scale_enabled is None:
+            scale_enabled = parameters.get("default_scale", False)
+
+        channels = animation.transform_channels(
+            include_translate=bool(translate_enabled),
+            include_rotate=bool(rotate_enabled),
+            include_scale=bool(scale_enabled),
+        )
+        return {"channels": channels}
+
+    def _execute_merge_node_lists(self, input_values):
+        nodes = self._as_list(input_values.get("nodes_a")) + self._as_list(input_values.get("nodes_b"))
+        return {"nodes": nodes}
+
+    def _execute_unique_node_list(self, input_values):
+        return {"nodes": self._unique_items(self._as_list(input_values.get("nodes")))}
+
+    def _execute_sort_node_list_by_name(self, parameters, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        name_scope = parameters.get("name_scope", "short")
+        case_sensitive = bool(parameters.get("case_sensitive", False))
+        descending = bool(parameters.get("descending", False))
+
+        sorted_nodes = sorted(
+            nodes,
+            key=lambda node: self._node_sort_text(node, name_scope, case_sensitive),
+            reverse=descending,
+        )
+        return {"nodes": sorted_nodes}
+
+    def _execute_reverse_node_list(self, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        nodes.reverse()
+        return {"nodes": nodes}
+
+    def _execute_sort_node_list_by_hierarchy(self, parameters, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        parent_first = bool(parameters.get("parent_first", True))
+        sorted_nodes = sorted(
+            nodes,
+            key=lambda node: (str(node).count("|"), str(node)),
+            reverse=not parent_first,
+        )
+        return {"nodes": sorted_nodes}
+
+    def _execute_filter_node_list_by_name(self, parameters, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        pattern = input_values.get("pattern") or ""
+        match_mode = parameters.get("match_mode", "contains")
+        case_sensitive = bool(parameters.get("case_sensitive", False))
+
+        matched_nodes = []
+        unmatched_nodes = []
+        for node in nodes:
+            if self._item_text_matches(node, pattern, match_mode, case_sensitive):
+                matched_nodes.append(node)
+            else:
+                unmatched_nodes.append(node)
+
+        return {
+            "matched_nodes": matched_nodes,
+            "unmatched_nodes": unmatched_nodes,
+        }
+
+    def _execute_get_node_list_item(self, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        index = int(float(input_values.get("index") or 0))
+        if 0 <= index < len(nodes):
+            return {"nodes": [nodes[index]]}
+        return {"nodes": []}
+
+    def _execute_node_list_count(self, input_values):
+        nodes = self._as_list(input_values.get("nodes"))
+        return {"count": float(len(nodes))}
+
+    def _execute_merge_attr_lists(self, input_values):
+        attrs = self._as_list(input_values.get("attrs_a")) + self._as_list(input_values.get("attrs_b"))
+        return {"attrs": attrs}
+
+    def _execute_unique_attr_list(self, input_values):
+        return {"attrs": self._unique_items(self._as_list(input_values.get("attrs")))}
+
+    def _execute_filter_attr_list_by_name(self, parameters, input_values):
+        attrs = self._as_list(input_values.get("attrs"))
+        pattern = input_values.get("pattern") or ""
+        match_mode = parameters.get("match_mode", "contains")
+        case_sensitive = bool(parameters.get("case_sensitive", False))
+
+        matched_attrs = []
+        unmatched_attrs = []
+        for attr in attrs:
+            if self._item_text_matches(attr, pattern, match_mode, case_sensitive):
+                matched_attrs.append(attr)
+            else:
+                unmatched_attrs.append(attr)
+
+        return {
+            "matched_attrs": matched_attrs,
+            "unmatched_attrs": unmatched_attrs,
+        }
+
+    def _execute_get_attr_list_item(self, input_values):
+        attrs = self._as_list(input_values.get("attrs"))
+        index = int(float(input_values.get("index") or 0))
+        if 0 <= index < len(attrs):
+            return {"attrs": [attrs[index]]}
+        return {"attrs": []}
+
+    def _execute_attr_list_count(self, input_values):
+        attrs = self._as_list(input_values.get("attrs"))
+        return {"count": float(len(attrs))}
+
+    def _item_text_matches(self, item, pattern, match_mode, case_sensitive):
+        if pattern is None or pattern == "":
+            return True
+
+        item_text_candidates = self._item_text_candidates(item)
+        pattern_text = str(pattern)
+
+        if not case_sensitive:
+            item_text_candidates = [text.lower() for text in item_text_candidates]
+            pattern_text = pattern_text.lower()
+
+        for item_text in item_text_candidates:
+            if self._text_matches(item_text, pattern_text, match_mode):
+                return True
+        return False
+
+    def _text_matches(self, item_text, pattern_text, match_mode):
+        if match_mode == "prefix":
+            return item_text.startswith(pattern_text)
+        if match_mode == "suffix":
+            return item_text.endswith(pattern_text)
+        if match_mode == "exact":
+            return item_text == pattern_text
+        return pattern_text in item_text
+
+    def _item_text_candidates(self, item):
+        if hasattr(item, "full_attr"):
+            return [item.full_attr, item.attr]
+        if hasattr(item, "name"):
+            text = item.name
+        else:
+            text = str(item)
+        return [text, text.rsplit("|", 1)[-1]]
+
+    def _node_sort_text(self, node, name_scope, case_sensitive):
+        text = str(node)
+        if name_scope == "short":
+            text = text.rsplit("|", 1)[-1]
+        if not case_sensitive:
+            text = text.lower()
+        return text
+
+    def _as_list(self, value):
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        return [value]
+
+    def _unique_items(self, items):
+        result = []
+        seen = set()
+        for item in items or []:
+            key = self._item_key(item)
+            if key not in seen:
+                result.append(item)
+                seen.add(key)
+        return result
+
+    def _item_key(self, item):
+        if hasattr(item, "full_attr"):
+            return item.full_attr
+        if hasattr(item, "name"):
+            return item.name
+        return str(item)
 
     def _execute_inspect_attributes(self, input_values):
         attr_refs = input_values.get("attrs")

@@ -1,6 +1,6 @@
 """Attribute helpers for blueprint Maya operations."""
 
-from ..core.types import AttrPacket, AttrRef, normalize_attr_refs, normalize_node_list
+from ..core.types import AttrPacket, AttrRef, TransformFrameData, normalize_attr_refs, normalize_node_list
 from .common import MayaApiError, UndoChunk, maya_modules
 from .scene_nodes import existing_nodes
 
@@ -171,6 +171,9 @@ def inspect_attributes(attr_refs):
 
 def set_attribute_refs(attr_refs, value, value_type="auto"):
     """Set attributes from AttrRef values."""
+    if isinstance(value, TransformFrameData):
+        return _set_transform_frame_data_attr_refs(attr_refs, value)
+
     cmds = maya_modules()
     refs = _existing_attr_refs(attr_refs)
     changed_attrs = []
@@ -186,6 +189,88 @@ def set_attribute_refs(attr_refs, value, value_type="auto"):
 
     print("Set Attribute Ref: {0} attribute(s).".format(len(changed_attrs)))
     return changed_attrs
+
+
+def _set_transform_frame_data_attr_refs(attr_refs, frame_data):
+    """Paste transform frame data into connected attribute references."""
+    cmds = maya_modules()
+    refs = _existing_attr_refs(attr_refs)
+    paste_channels = set(frame_data.paste_channels or frame_data.recorded_channels or [])
+    target_refs = [ref for ref in refs if ref.attr in paste_channels]
+    if not target_refs:
+        raise MayaApiError("No target attributes match copy frame channels.")
+
+    target_nodes = _unique_target_nodes(target_refs)
+    if len(frame_data.source_nodes) != len(target_nodes):
+        raise MayaApiError(
+            "Copy frame paste requires 1-to-1 lists: {0} source node(s), {1} target node(s).".format(
+                len(frame_data.source_nodes),
+                len(target_nodes),
+            )
+        )
+
+    current_time = float(cmds.currentTime(query=True))
+    changed_attrs = []
+    keyed_attrs = []
+
+    with UndoChunk("Blueprint Paste Copy Frame Data"):
+        try:
+            for frame in frame_data.frames:
+                cmds.currentTime(frame)
+                samples = _samples_for_frame(frame_data, frame)
+                for attr_ref in target_refs:
+                    sample = _sample_for_attr_ref(samples, attr_ref, frame_data, target_nodes)
+                    if sample is None:
+                        continue
+                    values = sample.get("values") or {}
+                    if attr_ref.attr not in values:
+                        continue
+                    cmds.setAttr(attr_ref.full_attr, values[attr_ref.attr])
+                    cmds.setKeyframe(attr_ref.full_attr)
+                    changed_attrs.append(attr_ref.full_attr)
+                    keyed_attrs.append(attr_ref.full_attr)
+        finally:
+            cmds.currentTime(current_time)
+
+    changed_attrs = _unique_text_items(changed_attrs)
+    keyed_attrs = _unique_text_items(keyed_attrs)
+    print(
+        "Paste Copy Frame Data: {0} attribute(s), {1} frame(s).".format(
+            len(changed_attrs),
+            len(frame_data.frames),
+        )
+    )
+    return keyed_attrs
+
+
+def _samples_for_frame(frame_data, frame):
+    return [sample for sample in frame_data.samples if float(sample.get("frame")) == float(frame)]
+
+
+def _sample_for_attr_ref(samples, attr_ref, frame_data, target_nodes):
+    if not samples:
+        return None
+
+    try:
+        target_index = target_nodes.index(attr_ref.node)
+    except ValueError:
+        return None
+
+    source_node = frame_data.source_nodes[target_index]
+    for sample in samples:
+        if sample.get("node") == source_node:
+            return sample
+    return None
+
+
+def _unique_target_nodes(attr_refs):
+    target_nodes = []
+    seen = set()
+    for attr_ref in attr_refs or []:
+        if attr_ref.node not in seen:
+            target_nodes.append(attr_ref.node)
+            seen.add(attr_ref.node)
+    return target_nodes
 
 
 def get_attribute_refs(attr_refs):
